@@ -1,0 +1,19 @@
+{
+  "name": "xss-server",
+  "version": "1.0.0",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.17.1",
+    "axios": "^1.6.8",
+    "socket.io": "^4.7.5",
+    "cheerio": "1.0.0-rc.10",
+    "node-telegram-bot-api": "^0.66.0",
+    "dotenv": "^16.4.5"
+  },
+  "engines": {
+    "node": "16.x"
+  }
+}

